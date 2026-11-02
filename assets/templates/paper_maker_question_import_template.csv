@@ -1,0 +1,2 @@
+class_id,section_id,subject_id,chapter_name,question_type,difficulty,question_text,description,option_a,option_b,option_c,option_d,correct_answer,marks,solution_text
+1,,1,Chapter 1,MCQ,Easy,What is 2 + 2?,,3,4,5,6,B,1,2 + 2 equals 4

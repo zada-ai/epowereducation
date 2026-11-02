@@ -1,0 +1,313 @@
+<?php
+if (!defined('BASEPATH')) {
+    exit('No direct script access allowed');
+}
+
+class Sms_model extends CI_Model
+{
+    public $pz_branch = null;
+
+
+    public function __construct()
+    {
+        parent::__construct();
+        $this->load->library("clickatell");
+        $this->load->library("twilio");
+        $this->load->library("msg91");
+        $this->load->library("bulk");
+        $this->load->library("textlocal");
+        $this->load->library("smscountry");
+        $this->load->library("bulksmsbd");
+        $this->load->library("custom_sms");
+        $this->load->library("pingzaar");
+    }
+
+    // common function for sending sms
+    public function send_sms($data = '', $id = '')
+    {
+        $branchID = !empty($data['branch_id']) ? $data['branch_id'] : 1;
+        $this->pz_branch = $branchID;
+        $sms_api = $this->application_model->smsServiceProvider($branchID);
+        if ($sms_api == 'disabled' || empty($sms_api)) {
+            return false;
+        }
+
+        $template = $this->db->select('id, template_id, branch_id, notify_student, notify_parent, template_body, dlt_template_id')
+                             ->where('template_id', $id)
+                             ->where('branch_id', $branchID)
+                             ->get('sms_template_details')
+                             ->row_array();
+
+        if (empty($template) || ($template['notify_student'] != 1 && $template['notify_parent'] != 1)) {
+            return false;
+        }
+
+        $studentID = $data['student_id'] ?? null;
+        $enrollID  = $data['enroll_id'] ?? null;
+
+        $this->db->select('s.*, e.id as enroll_id, e.roll, c.name as class_name, se.name as section_name, p.mobileno as parent_mobile');
+        $this->db->from('student s');
+        $this->db->join('enroll e', 'e.student_id = s.id', 'left');
+        $this->db->join('class c', 'c.id = e.class_id', 'left');
+        $this->db->join('section se', 'se.id = e.section_id', 'left');
+        $this->db->join('parent p', 'p.id = s.parent_id', 'left');
+
+        if (!empty($enrollID)) {
+            $this->db->where('e.id', $enrollID);
+        } elseif (!empty($studentID)) {
+            // Check if studentID was passed as enroll_id
+            $chk_enroll = $this->db->get_where('enroll', ['id' => $studentID])->row_array();
+            if (!empty($chk_enroll)) {
+                $this->db->where('e.id', $studentID);
+            } else {
+                $this->db->where('s.id', $studentID);
+            }
+        } else {
+            return false;
+        }
+
+        $student = $this->db->get()->row_array();
+        if (empty($student)) {
+            return false;
+        }
+
+        $text = $template['template_body'] ?? '';
+        if (empty($text)) {
+            return false;
+        }
+
+        // 1. Specific Multi-word Tags First (Prevents Tag Breaking)
+        if ($id == 2) {
+            $text = str_replace('{paid_amount}', $data['amount'] ?? '', $text);
+            $text = str_replace('{paid_date}', !empty($data['paid_date']) ? _d($data['paid_date']) : date('d-M-Y'), $text);
+        }
+        if ($id == 3 || $id == 12) {
+            $text = str_replace('{attendance_date}', !empty($data['date']) ? _d($data['date']) : date('d-M-Y'), $text);
+            $currentTime = !empty($data['time']) ? $data['time'] : date('h:i A');
+            $text = str_replace('{time}', $currentTime, $text);
+
+            $statusText = 'Present';
+            if (!empty($data['status'])) {
+                if ($data['status'] == 'A') $statusText = 'Absent';
+                elseif ($data['status'] == 'L') $statusText = 'Late';
+                elseif ($data['status'] == 'H') $statusText = 'Half Day';
+            }
+            $text = str_replace('{status}', $statusText, $text);
+            $text = str_replace('{role}', $data['role'] ?? 'Staff', $text);
+        }
+        if ($id == 4) {
+            $text = str_replace('{exam_name}', $data['exam_name'] ?? 'Exam', $text);
+            $text = str_replace('{term_name}', $data['term_name'] ?? '', $text);
+            $text = str_replace('{attendance_date}', !empty($data['date']) ? _d($data['date']) : date('d-M-Y'), $text);
+            $text = str_replace('{subject}', $data['subject'] ?? '', $text);
+        }
+        if ($id == 5) {
+            $text = str_replace('{exam_name}', $data['exam_name'] ?? 'Exam', $text);
+            $text = str_replace('{term_name}', $data['term_name'] ?? '', $text);
+            $text = str_replace('{marks}', $data['marks'] ?? '', $text);
+            $text = str_replace('{grade}', $data['grade'] ?? '', $text);
+            $text = str_replace('{subject}', $data['subject'] ?? '', $text);
+        }
+        if ($id == 6) {
+            $text = str_replace('{subject}', $data['subject'] ?? '', $text);
+            $text = str_replace('{deadline_date}', $data['deadline_date'] ?? date('d-M-Y'), $text);
+        }
+        if ($id == 7 || $id == 8) {
+            $text = str_replace('{subject}', $data['subject'] ?? '', $text);
+            $text = str_replace('{time}', $data['time'] ?? date('h:i A'), $text);
+            $text = str_replace('{date}', $data['date'] ?? date('d-M-Y'), $text);
+            $text = str_replace('{meeting_url}', $data['meeting_url'] ?? '', $text);
+        }
+        if ($id == 11) {
+            $text = str_replace('{venue}', $data['venue'] ?? 'School Campus', $text);
+            $text = str_replace('{date}', $data['date'] ?? date('d-M-Y'), $text);
+        }
+
+        // 2. Base Common Student Tags (Clean Duplicate "Class" prefix)
+        $className = trim($student['class_name'] ?? '');
+        $text = str_replace('Class {class}', '{class}', $text);
+        $text = str_replace('{class}', $className, $text);
+
+        $text = str_replace('{section}', $student['section_name'] ?? '', $text);
+        $text = str_replace('{roll}', $student['roll'] ?? '', $text);
+        $text = str_replace('{register_no}', $student['register_no'] ?? '', $text);
+        $text = str_replace('{admission_date}', !empty($student['admission_date']) ? _d($student['admission_date']) : date('d-M-Y'), $text);
+
+        $fullName = trim(($student['first_name'] ?? '') . ' ' . ($student['last_name'] ?? ''));
+        $text = str_replace('{name}', $fullName, $text);
+
+        
+        $targets = [];
+
+        // Parent number add karein
+        if ($template['notify_parent'] == 1 && !empty($student['parent_mobile'])) {
+            $clean_parent = preg_replace('/[^0-9]/', '', $student['parent_mobile']);
+            if (!empty($clean_parent)) {
+                $targets[$clean_parent] = $student['parent_mobile'];
+            }
+        }
+
+        // Student number add karein (Sirf agar Parent se mukhtalif ho)
+        if ($template['notify_student'] == 1 && !empty($student['mobileno'])) {
+            $clean_stu = preg_replace('/[^0-9]/', '', $student['mobileno']);
+            if (!empty($clean_stu) && !isset($targets[$clean_stu])) {
+                $targets[$clean_stu] = $student['mobileno'];
+            }
+        }
+
+        // Har unique number par sirf 1 hi dafa message shoot hoga
+        foreach ($targets as $phone) {
+            $res = $this->_send($sms_api, $phone, $text);
+            if ($res) $sent = true;
+        }
+
+        return $sent;
+    }
+
+    public function _send($sms_api, $receiver, $text, $dlt_template_id = '')
+    {
+        $receiver = trim(str_replace([' ', '-', '(', ')'], '', $receiver));
+        if (empty($receiver) || empty($text)) return false;
+
+        if ($sms_api == 1) {
+            $res = $this->twilio->sms($receiver, $text);
+        } elseif ($sms_api == 2) {
+            $res = $this->clickatell->send_message($receiver, $text);
+        } elseif ($sms_api == 3) {
+            $res = $this->msg91->send($receiver, $text, $dlt_template_id);
+        } elseif ($sms_api == 4) {
+            $res = $this->bulk->send($receiver, $text);
+        } elseif ($sms_api == 5) {
+            $res = $this->textlocal->sendSms($receiver, $text);
+        } elseif ($sms_api == 6) {
+            $res = $this->smscountry->send($receiver, $text);
+        } elseif ($sms_api == 7) {
+            $res = $this->bulksmsbd->send($receiver, $text);
+        } elseif ($sms_api == 8) {
+            $res = $this->custom_sms->send($receiver, $text, $dlt_template_id);
+        } elseif ($sms_api == 9 || $sms_api == 'pingzaar') {
+            $this->load->library('pingzaar');
+            $res = $this->pingzaar->send($receiver, $text, $this->pz_branch);
+        }
+        return !empty($res) ? true : false;
+    }
+
+    /* ===== Restored trigger functions ===== */
+
+    private function _tplStudent($data)
+    {
+        $enrollID  = $data['enroll_id'] ?? null;
+        $studentID = $data['student_id'] ?? ($data['id'] ?? null);
+        $this->db->select('s.id as student_id, s.first_name, s.last_name, s.mobileno, s.register_no, e.id as enroll_id, e.roll, e.branch_id, c.name as class_name, se.name as section_name, p.mobileno as parent_mobile, p.name as parent_name');
+        $this->db->from('student s');
+        $this->db->join('enroll e', 'e.student_id = s.id', 'left');
+        $this->db->join('class c', 'c.id = e.class_id', 'left');
+        $this->db->join('section se', 'se.id = e.section_id', 'left');
+        $this->db->join('parent p', 'p.id = s.parent_id', 'left');
+        if (!empty($enrollID)) {
+            $this->db->where('e.id', $enrollID);
+        } elseif (!empty($studentID)) {
+            $this->db->where('s.id', $studentID);
+        } else {
+            return [];
+        }
+        $this->db->order_by('e.id', 'DESC')->limit(1);
+        return $this->db->get()->row_array();
+    }
+
+    private function _tplSend($templateID, $branchID, $vars, $studentMobile = '', $parentMobile = '')
+    {
+        $branchID = !empty($branchID) ? $branchID : 1;
+        $this->pz_branch = $branchID;
+        $sms_api  = $this->application_model->smsServiceProvider($branchID);
+        if ($sms_api == 'disabled' || empty($sms_api)) {
+            return false;
+        }
+        $tpl = $this->db->where(['template_id' => $templateID, 'branch_id' => $branchID])
+                        ->get('sms_template_details')->row_array();
+        if (empty($tpl) || trim((string) $tpl['template_body']) === '') {
+            return false;
+        }
+        $text = $tpl['template_body'];
+        foreach ($vars as $k => $v) {
+            if (is_scalar($v) || $v === null) {
+                $text = str_replace('{' . $k . '}', (string) $v, $text);
+            }
+        }
+        $targets = [];
+        if ($tpl['notify_student'] == 1 && !empty($studentMobile)) $targets[] = $studentMobile;
+        if ($tpl['notify_parent'] == 1 && !empty($parentMobile))   $targets[] = $parentMobile;
+        $ok = false;
+        foreach (array_unique($targets) as $num) {
+            if ($this->_send($sms_api, $num, $text, $tpl['dlt_template_id'] ?? '')) $ok = true;
+        }
+        return $ok;
+    }
+
+    private function _tplStudentTrigger($templateID, $data)
+    {
+        $data = (array) $data;
+        $stu  = $this->_tplStudent($data);
+        if (empty($stu)) {
+            return false;
+        }
+        $full = trim(($stu['first_name'] ?? '') . ' ' . ($stu['last_name'] ?? ''));
+        $vars = array_merge($data, [
+            'name'         => $full,
+            'student_name' => $full,
+            'class'        => $stu['class_name'] ?? '',
+            'section'      => $stu['section_name'] ?? '',
+            'roll'         => $stu['roll'] ?? '',
+            'register_no'  => $stu['register_no'] ?? '',
+            'parent_name'  => $stu['parent_name'] ?? '',
+        ]);
+        if (!empty($data['subject_id']) && !isset($data['subject'])) {
+            $sub = $this->db->select('name')->where('id', $data['subject_id'])->get('subject')->row_array();
+            $vars['subject'] = $sub['name'] ?? '';
+        }
+        $branch = !empty($data['branch_id']) ? $data['branch_id'] : $stu['branch_id'];
+        return $this->_tplSend($templateID, $branch, $vars, $stu['mobileno'], $stu['parent_mobile']);
+    }
+
+    public function sendHomework($data)              { return $this->_tplStudentTrigger(6, $data); }
+    public function sendLiveClass($data)             { return $this->_tplStudentTrigger(7, $data); }
+    public function sendOnlineExam($data)            { return $this->_tplStudentTrigger(8, $data); }
+    public function sendBirthdayStudentWishes($data) { return $this->_tplStudentTrigger(9, $data); }
+    public function alumniEvent($data)               { return $this->_tplStudentTrigger(11, $data); }
+
+    public function sendBirthdayStaffWishes($data)
+    {
+        $data  = (array) $data;
+        $staff = $this->db->select('id, name, mobileno, branch_id')
+                          ->where('id', $data['staff_id'] ?? 0)->get('staff')->row_array();
+        if (empty($staff) || empty($staff['mobileno'])) {
+            return false;
+        }
+        $vars = array_merge($data, ['name' => $staff['name'], 'staff_name' => $staff['name']]);
+        return $this->_tplSend(10, $staff['branch_id'], $vars, $staff['mobileno'], $staff['mobileno']);
+    }
+
+    public function feeReminder($stuRow, $row)
+    {
+        $row = (array) $row;
+        $stu = $this->_tplStudent((array) $stuRow);
+        $msg = $row['message'] ?? ($row['sms_body'] ?? '');
+        if (empty($stu) || trim((string) $msg) === '') {
+            return false;
+        }
+        $branch  = !empty($row['branch_id']) ? $row['branch_id'] : $stu['branch_id'];
+        $this->pz_branch = $branch;
+        $sms_api = $this->application_model->smsServiceProvider($branch);
+        if ($sms_api == 'disabled' || empty($sms_api)) {
+            return false;
+        }
+        $full = trim(($stu['first_name'] ?? '') . ' ' . ($stu['last_name'] ?? ''));
+        $vars = array_merge((array) $stuRow, $row, ['name' => $full, 'student_name' => $full,
+                 'class' => $stu['class_name'] ?? '', 'section' => $stu['section_name'] ?? '']);
+        foreach ($vars as $k => $v) {
+            if (is_scalar($v) || $v === null) $msg = str_replace('{' . $k . '}', (string) $v, $msg);
+        }
+        $to = !empty($stu['parent_mobile']) ? $stu['parent_mobile'] : $stu['mobileno'];
+        return !empty($to) ? $this->_send($sms_api, $to, $msg, $row['dlt_template_id'] ?? '') : false;
+    }
+}
