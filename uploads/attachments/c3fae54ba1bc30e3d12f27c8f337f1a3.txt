@@ -1,0 +1,3 @@
+https://app.pingzaar.com/settings/mail
+user: admin@pingzaar.com
+Password: Tech@7863

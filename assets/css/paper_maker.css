@@ -1,0 +1,39 @@
+.pm-steps li a { cursor: pointer; }
+.pm-rule-row td { vertical-align: middle; }
+
+.pm-review-item { border-bottom: 1px solid #eee; padding: 8px 0; }
+.pm-review-item .badge { margin-right: 4px; }
+
+.pm-picker-list { max-height: 420px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; padding: 8px; }
+.pm-picker-item { border-bottom: 1px solid #f0f0f0; padding: 6px 4px; font-size: 13px; }
+.pm-picker-item:last-child { border-bottom: none; }
+
+.pm-a4-sheet { background: #fff; width: 210mm; min-height: 297mm; padding: 20mm; box-shadow: 0 0 8px rgba(0,0,0,0.15); position: relative; margin: 0 auto; }
+.pm-paper-header { text-align: center; border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 10px; }
+.pm-header-logo-left { text-align: left; }
+.pm-logo { height: 60px; margin-right: 10px; vertical-align: middle; }
+.pm-paper-meta { font-size: 13px; margin-bottom: 8px; }
+.pm-instructions { background: #f7f7f7; border: 1px solid #eee; padding: 8px 12px; font-size: 12.5px; margin-bottom: 10px; }
+.pm-question-list { padding-left: 20px; }
+.pm-question-item { margin-bottom: 12px; }
+.pm-marks-col { font-weight: bold; }
+.pm-options-list { margin: 4px 0 0 18px; }
+.pm-watermark { position: absolute; top: 40%; left: 15%; font-size: 70px; color: rgba(150,150,150,0.15); transform: rotate(-30deg); pointer-events: none; }
+
+@media print {
+    .panel-heading .panel-actions, .btn, .modal, nav { display: none !important; }
+    .pm-a4-sheet { box-shadow: none; margin: 0; }
+}
+
+/* Question Bank table responsiveness */
+#questionBankTable { width: 100% !important; }
+.table-responsive { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+@media (max-width: 767px) {
+    #questionBankTable td, #questionBankTable th { white-space: nowrap; }
+    #questionBankTable td:nth-child(5) { white-space: normal; min-width: 180px; } /* question text column */
+    .panel-actions .btn { margin-bottom: 4px; }
+}
+
+/* Per-type section headings (paper preview) */
+.pm-section-heading { font-weight: bold; text-decoration: underline; margin: 14px 0 6px 0; font-size: 15px; }
+.pm-q-description { font-size: 12px; margin: 2px 0 4px 0; }

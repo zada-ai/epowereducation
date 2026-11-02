@@ -1,0 +1,103 @@
+<?php
+defined('BASEPATH') or exit('No direct script access allowed');
+
+class Pingzaar
+{
+    protected $ci;
+
+    public function __construct()
+    {
+        $this->ci = &get_instance();
+        $this->ci->load->database();
+    }
+
+    public function send($numbers, $message)
+    {
+        try {
+            $res = $this->ci->db->get_where('sms_credential', ['sms_api_id' => 9, 'is_active' => 1])->row_array();
+            if (!$res) {
+                $res = $this->ci->db->get_where('sms_credential', ['sms_api_id' => 9])->row_array();
+            }
+            if (!$res) {
+                return false;
+            }
+
+            $wa_secret   = trim($res['field_one'] ?? '');
+            $wa_account  = trim($res['field_two'] ?? '');
+            $channel     = strtolower(trim($res['field_three'] ?? 'both'));
+            $sms_token   = trim($res['field_four'] ?? '');
+            $custom_sims = trim($res['field_five'] ?? '19');
+
+            if (!is_array($numbers)) {
+                $numbers = explode(',', (string)$numbers);
+            }
+
+            $formatted_numbers = [];
+            foreach ($numbers as $num) {
+                $clean = preg_replace('/[^0-9]/', '', (string)$num);
+                if (empty($clean)) continue;
+                if (strpos($clean, '03') === 0) {
+                    $formatted_numbers[] = '+92' . substr($clean, 1);
+                } elseif (strpos($clean, '923') === 0) {
+                    $formatted_numbers[] = '+' . $clean;
+                } else {
+                    $formatted_numbers[] = '+' . $clean;
+                }
+            }
+
+            if (empty($formatted_numbers)) {
+                return false;
+            }
+
+            // WhatsApp Dispatch
+            if ($channel === 'both' || $channel === 'whatsapp' || $channel === 'wa') {
+                foreach ($formatted_numbers as $recipient) {
+                    $ch = curl_init('https://wa.pingzaar.com/api/send/whatsapp');
+                    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                    curl_setopt($ch, CURLOPT_POST, true);
+                    curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query([
+                        'secret'    => $wa_secret,
+                        'account'   => $wa_account,
+                        'recipient' => $recipient,
+                        'type'      => 'text',
+                        'message'   => $message
+                    ]));
+                    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                    curl_setopt($ch, CURLOPT_TIMEOUT, 2);
+                    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 2);
+                    curl_exec($ch);
+                    curl_close($ch);
+                }
+            }
+
+            // SIM SMS Dispatch
+            if ($channel === 'both' || $channel === 'sms') {
+                $sim_id = !empty($custom_sims) ? (int)$custom_sims : 19;
+                $payload = json_encode([
+                    'sims'           => [$sim_id],
+                    'mobile_numbers' => $formatted_numbers,
+                    'message'        => $message
+                ]);
+
+                $ch = curl_init('https://app.pingzaar.com/api/v1/messages/send');
+                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                curl_setopt($ch, CURLOPT_POST, true);
+                curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                    'Authorization: Bearer ' . $sms_token,
+                    'Content-Type: application/json',
+                    'Accept: application/json'
+                ]);
+                curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                curl_setopt($ch, CURLOPT_TIMEOUT, 2);
+                curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 2);
+                curl_exec($ch);
+                curl_close($ch);
+            }
+
+            return true;
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+}
